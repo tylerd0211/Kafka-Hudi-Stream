@@ -1,0 +1,130 @@
+version: '3.8'
+
+services:
+  zookeeper-service:
+    image: confluentinc/cp-zookeeper:7.0.1
+    container_name: zookeeper-container
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 22181
+      ZOOKEEPER_TICK_TIME: 2000
+    ports:
+      - "22181:22181"
+    networks:
+      - pipeline-network-unique
+    volumes:
+      - zookeeper-data:/var/lib/zookeeper/data
+      - zookeeper-log:/var/lib/zookeeper/log
+    healthcheck:
+      test: ["CMD", "echo", "ruok", "|", "nc", "localhost", "22181"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  kafka-service:
+    image: confluentinc/cp-kafka:7.0.1
+    container_name: kafka-container
+    ports:
+      - "39094:39094"  # External access
+      - "49094:49094"  # Internal access
+    depends_on:
+      - zookeeper-service
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper-service:22181'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:39094,PLAINTEXT_INTERNAL://kafka-container:49094
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT_INTERNAL
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+    networks:
+      - pipeline-network-unique
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+
+  spark-app-service:
+    build:
+      context: ./spark-custom
+      dockerfile: Dockerfile
+    container_name: spark-app-container
+    depends_on:
+      - kafka-service
+    environment:
+      - SPARK_MODE=client
+      - KAFKA_BOOTSTRAP_SERVERS=kafka-container:49094
+      - KAFKA_TOPIC=FirstTopic
+    volumes:
+      - ./spark-apps:/opt/spark-apps
+      - ./hudi-data:/mnt/hudi-data
+      - ./hudi-config:/mnt/hudi-config
+    command: >
+      /opt/bitnami/spark/bin/spark-submit
+      --master spark://spark-master-container:7078
+      --conf spark.serializer=org.apache.spark.serializer.KryoSerializer
+      --conf spark.sql.extensions=org.apache.spark.sql.hudi.HoodieSparkSessionExtension
+      --conf spark.sql.catalog.spark_catalog=org.apache.spark.sql.hudi.catalog.HoodieCatalog
+      --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.3.0,org.apache.hudi:hudi-spark3.3-bundle_2.12:0.14.0
+      /opt/spark-apps/hudi-kafka.py
+    ports:
+      - "4043:4043"
+    networks:
+      - pipeline-network-unique
+    restart: unless-stopped
+
+  spark-master-service:
+    image: bitnami/spark:3.3.0
+    container_name: spark-master-container
+    environment:
+      - SPARK_MODE=master
+    ports:
+      - "7078:7078"
+      - "8083:8083"
+    networks:
+      - pipeline-network-unique
+    volumes:
+      - ./spark-apps:/opt/spark-apps
+      - ./hudi-data:/mnt/hudi-data
+    depends_on:
+      - kafka-service
+
+  spark-worker-service:
+    image: bitnami/spark:3.3.0
+    container_name: spark-worker-container
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master-container:7078
+    ports:
+      - "8183:8183"
+    networks:
+      - pipeline-network-unique
+    volumes:
+      - ./spark-apps:/opt/spark-apps
+      - ./hudi-data:/mnt/hudi-data
+    depends_on:
+      - spark-master-service
+
+  data-generator-service:
+    build:
+      context: .  # Use the root directory as context
+      dockerfile: data_generator/Dockerfile.data_generator
+    image: data-generator:latest
+    container_name: data-generator-container
+    depends_on:
+      - kafka-service
+    environment:
+      - KAFKA_BOOTSTRAP_SERVERS=kafka-container:49094
+      - KAFKA_TOPIC=FirstTopic
+    networks:
+      - pipeline-network-unique
+
+volumes:
+  zookeeper-data:
+  zookeeper-log:
+  kafka-data:
+  hudi-data:
+  hudi-config:
+
+networks:
+  pipeline-network-unique:
+    driver: bridge
+

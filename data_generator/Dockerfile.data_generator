@@ -1,0 +1,21 @@
+# data_generator/Dockerfile.data_generator
+
+FROM python:3.9-slim
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python packages
+RUN pip install --no-cache-dir kafka-python Faker
+
+# Set working directory
+WORKDIR /app
+
+# Copy the data generator script
+COPY data_generator/producer.py /app/producer.py
+
+# Entry point
+CMD ["python", "producer.py"]
+

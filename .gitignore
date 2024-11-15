@@ -1,0 +1,20 @@
+# Ignore Docker and temporary files
+*.log
+*.tmp
+*.swp
+
+# Ignore directories
+data/
+hudi-data/
+hudi-config/
+
+# Ignore Python cache files
+__pycache__/
+*.pyc
+
+# Ignore other temporary files
+*.log
+*.out
+
+# Ignore environment variables and config
+.env
